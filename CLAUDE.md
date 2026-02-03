@@ -1,0 +1,151 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+UIGen is an AI-powered React component generator with live preview. It generates React components using Claude AI and displays them in a virtual file system with real-time preview capabilities. The application works without an API key by returning static code instead of using LLM generation.
+
+## Tech Stack
+
+- Next.js 15 with App Router (Turbopack for dev)
+- React 19
+- TypeScript
+- Tailwind CSS v4
+- Prisma with SQLite
+- Anthropic Claude AI (claude-haiku-4-5)
+- Vercel AI SDK
+- Vitest for testing
+
+## Common Commands
+
+### Development
+```bash
+npm run dev              # Start dev server with Turbopack on port 3000
+npm run dev:daemon       # Start dev server in background, logs to logs.txt
+```
+
+### Setup
+```bash
+npm run setup            # Install deps + generate Prisma client + run migrations
+npm run db:reset         # Reset database (force)
+```
+
+### Build & Test
+```bash
+npm run build            # Production build
+npm run start            # Start production server
+npm run lint             # Run ESLint
+npm test                 # Run Vitest tests
+```
+
+### Database
+```bash
+npx prisma generate      # Generate Prisma client to src/generated/prisma
+npx prisma migrate dev   # Run migrations
+```
+
+## Architecture
+
+### Virtual File System (VFS)
+
+The core architecture uses an in-memory virtual file system (`VirtualFileSystem` in `src/lib/file-system.ts`) that stores generated files without writing to disk. The VFS:
+
+- Stores files in a tree structure with `FileNode` objects
+- Supports serialization/deserialization to persist in database
+- Reconstructed on each request from database storage
+- Files are kept in browser state and synced to database for authenticated users
+
+### AI Integration
+
+The chat API endpoint (`src/app/api/chat/route.ts`) orchestrates the AI workflow:
+
+1. System prompt (`generationPrompt`) is injected with Anthropic prompt caching
+2. Messages and VFS state are sent to the language model
+3. Model can call tools to manipulate files:
+   - `str_replace_editor` - Edit file contents via string replacement
+   - `file_manager` - Create/delete files and directories
+4. Supports up to 40 steps for agentic loops (4 steps in mock mode)
+5. Final state is saved to database via Prisma
+
+### Language Model Provider
+
+`src/lib/provider.ts` contains two implementations:
+
+- **Real provider**: Uses `@ai-sdk/anthropic` with Claude Haiku 4.5
+- **Mock provider**: Returns static code when `ANTHROPIC_API_KEY` is not set, simulates tool calls with hardcoded responses
+
+The mock provider extracts user prompts and returns example components to enable development without API costs.
+
+### JSX Transformation
+
+`src/lib/transform/jsx-transformer.ts` transforms TypeScript/JSX code for browser execution:
+
+- Uses Babel standalone to transpile TS/JSX to JS
+- Handles missing imports by creating placeholder modules
+- Extracts and tracks CSS imports separately
+- Configured for React 19's automatic JSX runtime
+
+### State Management
+
+Two React contexts manage application state:
+
+- **FileSystemContext** (`src/lib/contexts/file-system-context.tsx`): Manages VFS state, file operations, and preview rendering
+- **ChatContext** (`src/lib/contexts/chat-context.tsx`): Manages chat messages and streaming responses
+
+### Authentication
+
+- JWT-based authentication using `jose` library
+- Session management in `src/lib/auth.ts`
+- Middleware protects `/api/projects` and `/api/filesystem` routes
+- Anonymous users tracked via `src/lib/anon-work-tracker.ts`
+- Passwords hashed with bcrypt
+
+### Database Schema
+
+Two main models in `prisma/schema.prisma`:
+
+- **User**: id, email, password, timestamps
+- **Project**: id, name, userId (nullable), messages (JSON string), data (JSON string for VFS), timestamps
+
+Prisma client output is in `src/generated/prisma/` (not the default location).
+
+### Server Actions
+
+`src/actions/index.ts` exports server actions for:
+
+- Creating projects
+- Fetching projects
+- Loading individual project data
+
+## Project Structure
+
+```
+src/
+├── actions/           # Next.js server actions
+├── app/              # Next.js App Router pages and API routes
+│   ├── api/chat/     # Chat streaming endpoint
+│   └── [projectId]/  # Dynamic project route
+├── components/
+│   ├── ui/           # shadcn/ui components
+│   └── chat/         # Chat interface components
+├── lib/
+│   ├── contexts/     # React contexts
+│   ├── tools/        # AI tool implementations
+│   ├── transform/    # JSX transformer
+│   ├── prompts/      # System prompts
+│   ├── file-system.ts
+│   ├── provider.ts   # Model provider (real/mock)
+│   ├── auth.ts
+│   └── prisma.ts
+├── hooks/            # Custom React hooks
+└── middleware.ts     # Next.js middleware
+```
+
+## Key Implementation Details
+
+- Files generated by AI are stored in the VFS with paths like `/App.tsx`, `/components/Button.tsx`
+- The preview system renders the entry point file (typically `/App.tsx`) by transforming and evaluating code
+- Chat messages include both user input and AI tool calls/results
+- Database stores messages and VFS state as JSON strings in `Project.data` and `Project.messages`
+- Anonymous users can create projects which are migrated when they sign up
